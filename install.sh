@@ -1,48 +1,45 @@
 #!/bin/bash
 
-# Скрипт установки IPTV Manager
-# Поддерживает Ubuntu 20.04 и 24.04
+# Root check
+if [ "$EUID" -ne 0 ]; then
+  echo "Please run as root (sudo)"
+  exit
+fi
 
-set -e
+echo "--- IPTV Manager Installer ---"
+echo "Select language / Выберите язык:"
+echo "1) Russian (RU)"
+echo "2) English (EN)"
+read -p "Choice (1-2): " LANG_CHOICE
 
-echo "--- Установка системных зависимостей ---"
-sudo apt update
-sudo apt install -y python3 python3-pip python3-venv sqlite3
+# Install system packages
+apt update && apt install -y python3 python3-pip python3-venv sqlite3
 
-# Настройка путей
-INSTALL_DIR="/opt/iptv_manager"
-PLAYLIST_DIR="$INSTALL_DIR/playlists"
-TEMPLATE_DIR="$INSTALL_DIR/templates"
+# Create folder structure
+mkdir -p /opt/iptv_manager/playlists
+mkdir -p /opt/iptv_manager/templates
+cd /opt/iptv_manager
 
-echo "--- Создание структуры папок ---"
-sudo mkdir -p $PLAYLIST_DIR
-sudo mkdir -p $TEMPLATE_DIR
+# Setup Virtual Environment
+python3 -m venv venv
+./venv/bin/pip install flask flask-sqlalchemy flask-login werkzeug
 
-# Запрос порта у пользователя
-read -p "Введите порт для работы панели (по умолчанию 5000): " USER_PORT
-USER_PORT=${USER_PORT:-5000}
-
-echo "--- Создание виртуального окружения и установка Flask ---"
-sudo python3 -m venv $INSTALL_DIR/venv
-sudo $INSTALL_DIR/venv/bin/pip install flask flask-sqlalchemy flask-login
-
-echo "--- Запись файлов проекта ---"
-
-# 1. Запись app.py
-cat <<EOF | sudo tee $INSTALL_DIR/app.py > /dev/null
+# --- GENERATE APP.PY ---
+cat <<'EOF' > app.py
 # -*- coding: utf-8 -*-
 from flask import Flask, request, render_template, redirect, url_for, Response, send_file
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import check_password_hash, generate_password_hash
 from datetime import datetime
-import os, shutil
+import os
 
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'gerkules-ultimate-fix'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///$INSTALL_DIR/iptv.db'
-app.config['PLAYLIST_FOLDER'] = '$PLAYLIST_DIR'
-app.config['DB_PATH'] = '$INSTALL_DIR/iptv.db'
+app.config['SECRET_KEY'] = 'gerkules-master-key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////opt/iptv_manager/iptv.db'
+app.config['PLAYLIST_FOLDER'] = '/opt/iptv_manager/playlists'
+app.config['DB_PATH'] = '/opt/iptv_manager/iptv.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 login_manager = LoginManager(app)
@@ -64,11 +61,13 @@ class Client(db.Model):
     token = db.Column(db.String(100), unique=True)
     playlist_file = db.Column(db.String(100))
     expire_date = db.Column(db.Date)
-    auto_delete = db.Column(db.Boolean, default=False)
 
 @login_manager.user_loader
-def load_user(user_id):
-    return Admin.query.get(int(user_id))
+def load_user(user_id): return Admin.query.get(int(user_id))
+
+@app.context_processor
+def inject_vars():
+    return {'unlim_val': datetime.strptime('2099-12-31', '%Y-%m-%d').date()}
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -77,161 +76,80 @@ def login():
         if user and check_password_hash(user.password, request.form.get('password')):
             login_user(user)
             return redirect(url_for('admin'))
-        return "Ошибка входа", 401
-    
-    return '''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <title>IPTV Login</title>
-        <style>
-            body { font-family: sans-serif; background: #f0f2f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-            .login-card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 8px 20px rgba(0,0,0,0.1); width: 100%; max-width: 350px; text-align: center; }
-            h2 { color: #2c3e50; margin-bottom: 25px; }
-            input { width: 100%; padding: 12px; margin-bottom: 15px; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; font-size: 14px; }
-            button { width: 100%; padding: 12px; background: #3498db; color: white; border: none; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; transition: background 0.3s; }
-            button:hover { background: #2980b9; }
-            .hint { font-size: 12px; color: #7f8c8d; margin-top: 15px; }
-        </style>
-    </head>
-    <body>
-        <div class="login-card">
-            <h2>Вход в панель</h2>
-            <form method="POST">
-                <input type="text" name="username" placeholder="Логин" required>
-                <input type="password" name="password" placeholder="Пароль" required>
-                <button type="submit">Войти</button>
-            </form>
-            <div class="hint">Логин: admin / Пароль: admin</div>
-        </div>
-    </body>
-    </html>
-    '''
+    return render_template('login.html')
 
 @app.route('/admin', methods=['GET', 'POST'])
 @login_required
 def admin():
     if request.method == 'POST':
-        new_client = Client(
-            username=request.form.get('username'),
-            token=request.form.get('token'),
-            playlist_file=request.form.get('playlist_file'),
-            expire_date=datetime.strptime(request.form.get('expire_date'), '%Y-%m-%d').date(),
-            auto_delete='auto_delete' in request.form
-        )
-        db.session.add(new_client)
-        db.session.commit()
+        try:
+            d = request.form.get('expire_date') or '2099-12-31'
+            db.session.add(Client(username=request.form['username'], token=request.form['token'], playlist_file=request.form['playlist_file'], expire_date=datetime.strptime(d, '%Y-%m-%d').date()))
+            db.session.commit()
+        except: db.session.rollback()
         return redirect(url_for('admin'))
-    
-    users = Client.query.all()
+    users = Client.query.order_by(Client.id.desc()).all()
     files = [f for f in os.listdir(app.config['PLAYLIST_FOLDER']) if f.endswith(('.m3u', '.m3u8'))]
     return render_template('admin.html', users=users, files=files)
 
 @app.route('/edit/<int:id>', methods=['GET', 'POST'])
 @login_required
 def edit_user(id):
-    user = Client.query.get_or_404(id)
+    u = Client.query.get_or_404(id)
     if request.method == 'POST':
-        user.username = request.form.get('username')
-        user.token = request.form.get('token')
-        user.playlist_file = request.form.get('playlist_file')
-        user.expire_date = datetime.strptime(request.form.get('expire_date'), '%Y-%m-%d').date()
-        user.auto_delete = 'auto_delete' in request.form
-        db.session.commit()
-        return redirect(url_for('admin'))
+        try:
+            u.username, u.token, u.playlist_file = request.form['username'], request.form['token'], request.form['playlist_file']
+            u.expire_date = datetime.strptime(request.form['expire_date'], '%Y-%m-%d').date()
+            db.session.commit()
+            return redirect(url_for('admin'))
+        except: db.session.rollback()
     files = [f for f in os.listdir(app.config['PLAYLIST_FOLDER']) if f.endswith(('.m3u', '.m3u8'))]
-    return render_template('edit.html', user=user, files=files)
+    return render_template('edit.html', user=u, files=files)
 
-@app.route('/settings', methods=['GET', 'POST'])
+@app.route('/delete/<int:id>')
 @login_required
-def settings():
-    port_setting = Settings.query.filter_by(key='port').first()
-    current_port = port_setting.value if port_setting else "5000"
-    if request.method == 'POST':
-        admin_user = Admin.query.get(current_user.id)
-        if request.form.get('username'): admin_user.username = request.form.get('username')
-        if request.form.get('password'): admin_user.password = generate_password_hash(request.form.get('password'))
-        new_port = request.form.get('port', '5000')
-        if not port_setting:
-            db.session.add(Settings(key='port', value=new_port))
-        else:
-            port_setting.value = new_port
-        db.session.commit()
-        return f'Настройки сохранены! Порт: {new_port}. Перезапустите сервис (systemctl restart iptv_manager). <br><a href="/admin">Назад</a>'
-    
-    return f'''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="UTF-8">
-        <style>
-            body {{ font-family: sans-serif; background: #f4f7f6; display: flex; justify-content: center; padding-top: 50px; }}
-            .card {{ background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 400px; }}
-            h3 {{ color: #2c3e50; text-align: center; }}
-            input {{ width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }}
-            label {{ font-size: 13px; color: #666; }}
-            button {{ width: 100%; padding: 12px; background: #2ecc71; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 10px; }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h3>⚙️ Настройки сервера</h3>
-            <form method="POST">
-                <label>Логин администратора</label>
-                <input name="username" value="{current_user.username}">
-                <label>Новый пароль (пусто = не менять)</label>
-                <input type="password" name="password" placeholder="********">
-                <label>Порт сервера</label>
-                <input type="number" name="port" value="{current_port}">
-                <button type="submit">Сохранить изменения</button>
-            </form>
-            <hr style="margin: 25px 0; border: 0; border-top: 1px solid #eee;">
-            <a href="/admin" style="display: block; text-align: center; color: #95a5a6; text-decoration: none;">← Вернуться</a>
-        </div>
-    </body>
-    </html>
-    '''
+def delete_user(id):
+    u = Client.query.get(id); (db.session.delete(u), db.session.commit()) if u else None
+    return redirect(url_for('admin'))
 
 @app.route('/backup')
 @login_required
-def backup():
-    return send_file(app.config['DB_PATH'], as_attachment=True, download_name="iptv_backup.db")
+def backup(): return send_file(app.config['DB_PATH'], as_attachment=True, download_name="iptv_backup.db")
 
 @app.route('/restore', methods=['POST'])
 @login_required
 def restore():
     file = request.files.get('backup_file')
     if file and file.filename.endswith('.db'):
-        temp_path = app.config['DB_PATH'] + '.new'
-        file.save(temp_path)
-        shutil.move(temp_path, app.config['DB_PATH'])
-        return 'База восстановлена! <a href="/admin">Вернуться</a>'
-    return "Ошибка файла", 400
+        db.session.remove(); db.engine.dispose()
+        file.save(app.config['DB_PATH'])
+        os.chmod(app.config['DB_PATH'], 0o666)
+        return 'OK! <a href="/admin">Back</a>'
+    return "Error", 400
 
-@app.route('/delete/<int:id>')
+@app.route('/settings', methods=['GET', 'POST'])
 @login_required
-def delete_user(id):
-    user = Client.query.get_or_404(id)
-    db.session.delete(user)
-    db.session.commit()
-    return redirect(url_for('admin'))
+def settings():
+    p_set = Settings.query.filter_by(key='port').first()
+    if request.method == 'POST':
+        new_p = request.form.get('port', '8090')
+        if p_set: p_set.value = new_p
+        else: db.session.add(Settings(key='port', value=new_p))
+        db.session.commit()
+        return render_template('settings_ok.html', port=new_p)
+    return render_template('settings.html', port=(p_set.value if p_set else "8090"))
 
 @app.route('/get')
 def get_playlist():
-    token = request.args.get('token')
-    user = Client.query.filter_by(token=token).first()
-    if user and user.expire_date >= datetime.now().date():
-        file_path = os.path.join(app.config['PLAYLIST_FOLDER'], user.playlist_file)
-        if os.path.exists(file_path):
-            with open(file_path, 'r', encoding='utf-8') as f:
-                return Response(f.read(), mimetype='text/plain')
-    return "Доступ запрещен", 403
+    u = Client.query.filter_by(token=request.args.get('token')).first()
+    if u and u.expire_date >= datetime.now().date():
+        p = os.path.join(app.config['PLAYLIST_FOLDER'], u.playlist_file)
+        if os.path.exists(p):
+            with open(p, 'r', encoding='utf-8') as f: return Response(f.read(), mimetype='text/plain')
+    return "Denied", 403
 
 @app.route('/logout')
-def logout():
-    logout_user()
-    return redirect(url_for('login'))
+def logout(): logout_user(); return redirect(url_for('login'))
 
 if __name__ == '__main__':
     with app.app_context():
@@ -239,156 +157,204 @@ if __name__ == '__main__':
         if not Admin.query.first():
             db.session.add(Admin(username='admin', password=generate_password_hash('admin')))
             db.session.commit()
-        p = Settings.query.filter_by(key='port').first()
-        if not p:
-            db.session.add(Settings(key='port', value=str($USER_PORT)))
-            db.session.commit()
-            run_port = $USER_PORT
-        else:
-            run_port = int(p.value)
-    app.run(host='0.0.0.0', port=run_port)
+        ps = Settings.query.filter_by(key='port').first()
+        port = int(ps.value) if ps else 8090
+    app.run(host='0.0.0.0', port=port)
 EOF
 
-# 2. Запись admin.html
-cat <<EOF | sudo tee $TEMPLATE_DIR/admin.html > /dev/null
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <title>IPTV Manager</title>
-    <style>
-        body { font-family: sans-serif; background: #f4f7f6; padding: 20px; color: #333; }
-        .container { max-width: 1100px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
-        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 25px; border-bottom: 1px solid #eee; padding-bottom: 15px; }
-        .btn { padding: 9px 16px; border-radius: 6px; text-decoration: none; color: white; font-size: 13px; font-weight: bold; cursor: pointer; border: none; transition: 0.2s; }
-        .btn:hover { opacity: 0.85; }
-        .btn-settings { background: #9b59b6; }
-        .btn-backup { background: #27ae60; }
-        .btn-restore { background: #f39c12; }
-        .btn-logout { background: #7f8c8d; }
-        .btn-add { background: #2ecc71; }
-        form.add-form { background: #f8f9fa; padding: 18px; border-radius: 10px; display: flex; gap: 10px; margin-bottom: 25px; align-items: center; border: 1px solid #eef0f2; }
-        form.add-form input, select { padding: 10px; border: 1px solid #ddd; border-radius: 6px; flex: 1; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { padding: 14px; border-bottom: 1px solid #f0f0f0; text-align: left; }
-        th { background: #4a69bd; color: white; }
-        code { background: #ebedef; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-    </style>
-</head>
-<body>
-<div class="container">
-    <div class="top-bar">
-        <div style="display:flex; gap:12px;">
-            <a href="/settings" class="btn btn-settings">⚙️ Настройки</a>
-            <a href="/backup" class="btn btn-backup">📥 Бэкап</a>
-            <form action="/restore" method="POST" enctype="multipart/form-data" style="display:flex; gap:8px;">
-                <input type="file" name="backup_file" accept=".db" required style="font-size:11px; width:140px;">
-                <button type="submit" class="btn btn-restore">Восстановить</button>
-            </form>
-        </div>
-        <a href="/logout" class="btn btn-logout">Выйти</a>
+# --- TRANSLATIONS ---
+if [ "$LANG_CHOICE" == "1" ]; then
+    L_TITLE="Управление клиентами"; L_SET="Настройки"; L_BACKUP="Бэкап"; L_RESTORE="Восстановить"; L_OUT="Выход";
+    L_NAME="Имя"; L_TOKEN="Токен"; L_FILE="Файл"; L_DATE="Срок"; L_ACT="Действие"; L_CREATE="Создать";
+    L_UNLIM="Безлимит"; L_EDIT="Изменить"; L_DEL="Удалить"; L_SET_TITLE="Настройки панели"; L_PORT="Порт"; L_SAVE="Сохранить";
+    L_CMD_TEXT="Для смены Admin / Pass введите в терминале:"; L_LOG_PASS="ЛОГИН ПАРОЛЬ"; L_CHOOSE="Выбрать файл";
+    L_DATE_LANG="ru-RU"; L_PORT_OK="Порт сохранен! Выполните в терминале:";
+    L_UNINSTALL="ДЛЯ УДАЛЕНИЯ ВСЕГО ПРОЕКТА:";
+else
+    L_TITLE="Client Management"; L_SET="Settings"; L_BACKUP="Backup"; L_RESTORE="Restore"; L_OUT="Logout";
+    L_NAME="Name"; L_TOKEN="Token"; L_FILE="File"; L_DATE="Expire"; L_ACT="Action"; L_CREATE="Create";
+    L_UNLIM="Unlimited"; L_EDIT="Edit"; L_DEL="Delete"; L_SET_TITLE="Panel Settings"; L_PORT="Port"; L_SAVE="Save";
+    L_CMD_TEXT="To change Admin / Pass, run in terminal:"; L_LOG_PASS="USER PASS"; L_CHOOSE="Choose File";
+    L_DATE_LANG="en-US"; L_PORT_OK="Port saved! Run in terminal:";
+    L_UNINSTALL="TO UNINSTALL THE ENTIRE PROJECT:";
+fi
+
+# --- TEMPLATES ---
+cat <<EOF > templates/admin.html
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>IPTV Panel</title>
+<style>
+    body { font-family: sans-serif; background: #f0f2f5; padding: 20px; }
+    .card { background: white; padding: 20px; border-radius: 12px; max-width: 1050px; margin: auto; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .btn { padding: 8px 15px; border-radius: 6px; text-decoration: none; color: white; cursor: pointer; border: none; font-size: 13px; font-weight: bold; }
+    form { background: #f8f9fa; padding: 15px; border-radius: 10px; display: flex; gap: 10px; margin: 20px 0; align-items: center; }
+    input, select { padding: 10px; border: 1px solid #ddd; border-radius: 6px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 12px; border-bottom: 1px solid #eee; text-align: left; }
+    th { background: #4a69bd; color: white; }
+    .file-input-wrapper { position: relative; overflow: hidden; display: inline-block; }
+    .file-input-wrapper input[type=file] { font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; }
+    .btn-file { background: #eee; color: #555; border: 1px solid #ccc; padding: 7px 10px; border-radius: 5px; font-size: 11px; }
+</style>
+</head><body lang="$L_DATE_LANG"><div class="card">
+<div style="display:flex; justify-content:space-between; align-items:center;">
+    <h2>$L_TITLE</h2>
+    <div style="display:flex; gap:10px; align-items:center;">
+        <a href="/settings" class="btn" style="background:#9b59b6;">$L_SET</a>
+        <a href="/backup" class="btn" style="background:#27ae60;">$L_BACKUP</a>
+        <form action="/restore" method="POST" enctype="multipart/form-data" style="margin:0; background:none; padding:0; border:none; display:flex; gap:5px;">
+            <div class="file-input-wrapper">
+                <button class="btn-file" type="button">$L_CHOOSE</button>
+                <input type="file" name="backup_file" required onchange="this.previousElementSibling.innerText=this.files[0].name">
+            </div>
+            <button type="submit" class="btn" style="background:#f39c12;">$L_RESTORE</button>
+        </form>
+        <a href="/logout" style="color:red; text-decoration:none; font-weight:bold;">$L_OUT</a>
     </div>
-
-    <h2>Управление клиентами</h2>
-
-    <form class="add-form" method="POST">
-        <input type="text" name="username" placeholder="Имя клиента" required>
-        <input type="text" name="token" placeholder="Токен" required>
-        <select name="playlist_file" required>
-            <option value="">-- Файл --</option>
-            {% for file in files %}<option value="{{ file }}">{{ file }}</option>{% endfor %}
-        </select>
-        <input type="date" name="expire_date" required>
-        <button type="submit" class="btn btn-add">Добавить</button>
-    </form>
-
-    <table>
-        <tr>
-            <th>Имя</th>
-            <th>Ссылка</th>
-            <th>Файл</th>
-            <th>До даты</th>
-            <th>Действие</th>
-        </tr>
-        {% for user in users %}
-        <tr>
-            <td><strong>{{ user.username }}</strong></td>
-            <td><code>{{ request.host_url }}get?token={{ user.token }}</code></td>
-            <td>{{ user.playlist_file }}</td>
-            <td>{{ user.expire_date.strftime('%d.%m.%Y') }}</td>
-            <td>
-                <a href="/edit/{{ user.id }}" style="color:#3498db; margin-right:10px;">Изменить</a>
-                <a href="/delete/{{ user.id }}" style="color:#e74c3c;" onclick="return confirm('Удалить?')">X</a>
-            </td>
-        </tr>
-        {% endfor %}
-    </table>
 </div>
-</body>
-</html>
+<form method="POST">
+    <input type="text" name="username" placeholder="$L_NAME" required>
+    <input type="text" name="token" placeholder="$L_TOKEN" required>
+    <select name="playlist_file" required>
+        <option value="">-- $L_FILE --</option>
+        {% for file in files %}<option value="{{ file }}">{{ file }}</option>{% endfor %}
+    </select>
+    <input type="date" name="expire_date" id="d_add">
+    <button type="button" onclick="document.getElementById('d_add').value='2099-12-31'" style="border:none; background:none; cursor:pointer; font-size:20px;">♾️</button>
+    <button type="submit" class="btn" style="background:#2ecc71;">$L_CREATE</button>
+</form>
+<table>
+    <tr><th>$L_NAME</th><th>URL</th><th>$L_FILE</th><th>$L_DATE</th><th>$L_ACT</th></tr>
+    {% for user in users %}
+    <tr>
+        <td>{{ user.username }}</td>
+        <td><code>{{ request.host_url }}get?token={{ user.token }}</code></td>
+        <td>{{ user.playlist_file }}</td>
+        <td>{% if user.expire_date == unlim_val %}<span style="color:green">$L_UNLIM ♾️</span>{% else %}{{ user.expire_date }}{% endif %}</td>
+        <td>
+            <a href="/edit/{{ user.id }}" style="color:#3498db; margin-right:10px; text-decoration:none;">$L_EDIT</a>
+            <a href="/delete/{{ user.id }}" style="color:red; text-decoration:none; font-weight:bold;" onclick="return confirm('?')">X</a>
+        </td>
+    </tr>
+    {% endfor %}
+</table>
+</div></body></html>
 EOF
 
-# 3. Запись edit.html
-cat <<EOF | sudo tee $TEMPLATE_DIR/edit.html > /dev/null
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="UTF-8">
-    <title>Edit Client</title>
-    <style>
-        body { font-family: sans-serif; background: #f4f7f6; display: flex; justify-content: center; padding-top: 50px; }
-        .card { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 380px; }
-        h3 { color: #2c3e50; text-align: center; margin-bottom: 20px; }
-        input, select { width: 100%; padding: 12px; margin: 10px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }
-        button { width: 100%; padding: 12px; background: #3498db; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; margin-top: 15px; }
-    </style>
-</head>
-<body>
-<div class="card">
-    <h3>Редактировать клиента</h3>
-    <form method="POST">
-        <input type="text" name="username" value="{{ user.username }}" required>
-        <input type="text" name="token" value="{{ user.token }}" required>
-        <select name="playlist_file">
-            {% for file in files %}<option value="{{ file }}" {% if file == user.playlist_file %}selected{% endif %}>{{ file }}</option>{% endfor %}
-        </select>
-        <input type="date" name="expire_date" value="{{ user.expire_date }}" required>
-        <button type="submit">Сохранить изменения</button>
-    </form>
-    <a href="/admin" style="display: block; text-align: center; color: #95a5a6; text-decoration: none; margin-top: 15px;">Отмена</a>
+cat <<EOF > templates/settings.html
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Settings</title>
+<style>
+    body { font-family: sans-serif; background: #f0f2f5; padding: 40px; }
+    .card { background: white; padding: 30px; border-radius: 12px; max-width: 600px; margin: auto; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+</style>
+</head><body><div class="card">
+<h2>$L_SET_TITLE</h2>
+<form method="POST" style="border-bottom: 1px solid #eee; padding-bottom: 20px; margin-bottom: 20px;">
+    <label>$L_PORT:</label>
+    <input type="number" name="port" value="{{ port }}" style="padding:8px; width:80px;">
+    <button type="submit" style="padding:8px 15px; background:#2ecc71; color:white; border:none; border-radius:4px; font-weight:bold;">$L_SAVE</button>
+</form>
+<div style="background:#e8f4fd; padding:20px; border-radius:10px; border:1px solid #3498db;">
+    <h3 style="margin-top:0; color:#2980b9;">🔐 Admin / Password</h3>
+    <p style="font-size:14px;">$L_CMD_TEXT</p>
+    <code style="background:#222; color:#00ff00; padding:12px; display:block; border-radius:5px; font-size:13px;">
+        sudo /opt/iptv_manager/reset.sh $L_LOG_PASS
+    </code>
 </div>
-</body>
-</html>
+<br><a href="/admin" style="color:#999; text-decoration:none;">← Back</a>
+</div></body></html>
 EOF
 
-echo "--- Настройка прав доступа ---"
-sudo chown -R $USER:$USER $INSTALL_DIR
+cat <<EOF > templates/settings_ok.html
+<!DOCTYPE html><html><head><meta charset="UTF-8"></head>
+<body style="font-family:sans-serif; background:#f0f2f5; padding:50px; text-align:center;">
+<div style="background:white; padding:30px; border-radius:12px; display:inline-block; border:1px solid #2ecc71;">
+    <h3 style="color:#27ae60;">$L_PORT_OK</h3>
+    <code style="background:#222; color:#00ff00; padding:10px; display:block; margin:15px 0;">sudo systemctl restart iptv_manager</code>
+    <a href="/admin" style="text-decoration:none; color:#3498db; font-weight:bold;">← OK / Back</a>
+</div>
+</body></html>
+EOF
 
-echo "--- Создание службы systemd ---"
-cat <<EOF | sudo tee /etc/systemd/system/iptv_manager.service > /dev/null
+cat <<'EOF' > templates/edit.html
+<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+    body { font-family: sans-serif; background: #f0f2f5; display: flex; justify-content: center; padding-top: 40px; }
+    .card { background: white; padding: 25px; border-radius: 12px; width: 360px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+    input, select { width: 100%; padding: 10px; margin: 8px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }
+    .btn-fast { padding: 6px; font-size: 11px; cursor: pointer; background: #eee; border: 1px solid #ccc; border-radius: 4px; margin-right: 4px; }
+</style></head><body><div class="card">
+<form method="POST">
+    <input type="text" name="username" value="{{ user.username }}" required>
+    <input type="text" name="token" value="{{ user.token }}" required>
+    <select name="playlist_file">
+        {% for file in files %}<option value="{{ file }}" {% if file == user.playlist_file %}selected{% endif %}>{{ file }}</option>{% endfor %}
+    </select>
+    <input type="date" name="expire_date" id="exp_date" value="{{ user.expire_date }}" required>
+    <div style="margin-bottom: 15px;">
+        <button type="button" class="btn-fast" onclick="setDate(30)">+30 d</button>
+        <button type="button" class="btn-fast" onclick="setDate(365)">+1 y</button>
+        <button type="button" class="btn-fast" onclick="setUnlim()">♾️</button>
+    </div>
+    <button type="submit" style="background:#3498db; color:white; border:none; padding:12px; width:100%; border-radius:6px; cursor:pointer; font-weight:bold;">Save</button>
+</form>
+<a href="/admin" style="display:block; text-align:center; margin-top:15px; color:#999; text-decoration:none;">Cancel</a>
+</div>
+<script>
+    function setDate(d_plus) { let d=new Date(); d.setDate(d.getDate()+d_plus); document.getElementById('exp_date').value=d.toISOString().split('T')[0]; }
+    function setUnlim() { document.getElementById('exp_date').value='2099-12-31'; }
+</script></body></html>
+EOF
+
+cat <<'EOF' > templates/login.html
+<html><body style="background:#1a1a1a;color:white;display:flex;justify-content:center;align-items:center;height:100vh;font-family:sans-serif;"><form method="post" style="background:#333;padding:25px;border-radius:10px;"><h2>IPTV Login</h2><input name="username" placeholder="Login" required style="display:block;margin-bottom:10px;padding:8px;"><input name="password" type="password" placeholder="Password" required style="display:block;margin-bottom:20px;padding:8px;"><button type="submit" style="width:100%;padding:10px;background:#3498db;color:white;border:none;cursor:pointer;">Login</button></form></body></html>
+EOF
+
+# --- CREATE RESET.SH ---
+cat <<'EOF' > reset.sh
+#!/bin/bash
+if [ -z "$1" ] || [ -z "$2" ]; then echo "Usage: sudo ./reset.sh user pass"; exit 1; fi
+cat <<EOP > temp_reset.py
+from app import db, Admin, app
+from werkzeug.security import generate_password_hash
+with app.app_context():
+    a = Admin.query.first()
+    if a:
+        a.username = '$1'
+        a.password = generate_password_hash('$2')
+        db.session.commit()
+EOP
+/opt/iptv_manager/venv/bin/python3 temp_reset.py
+rm temp_reset.py
+systemctl restart iptv_manager
+echo "Done! Credentials updated and service restarted."
+EOF
+chmod +x reset.sh
+
+# --- CREATE SERVICE ---
+cat <<EOF > /etc/systemd/system/iptv_manager.service
 [Unit]
 Description=IPTV Manager Panel
 After=network.target
 
 [Service]
-User=$USER
-WorkingDirectory=$INSTALL_DIR
-ExecStart=$INSTALL_DIR/venv/bin/python app.py
+User=root
+WorkingDirectory=/opt/iptv_manager
+ExecStart=/opt/iptv_manager/venv/bin/python3 app.py
 Restart=always
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-echo "--- Запуск сервиса ---"
-sudo systemctl daemon-reload
-sudo systemctl enable iptv_manager
-sudo systemctl start iptv_manager
+systemctl daemon-reload
+systemctl enable iptv_manager
+systemctl start iptv_manager
 
+IP=$(hostname -I | awk '{print $1}')
 echo "------------------------------------------------"
-echo "Установка завершена!"
-echo "Панель доступна по адресу: http://$(hostname -I | awk '{print $1}'):$USER_PORT"
-echo "Логин: admin"
-echo "Пароль: admin"
-echo "Файлы плейлистов (.m3u) кладите в: $PLAYLIST_DIR"
+echo "INSTALLATION COMPLETE!"
+echo "Access your panel at: http://$IP:8090/login"
+echo "Default credentials: admin / admin"
+echo ""
+echo "$L_UNINSTALL"
+echo "sudo systemctl stop iptv_manager && sudo systemctl disable iptv_manager && sudo rm /etc/systemd/system/iptv_manager.service && sudo rm -rf /opt/iptv_manager && sudo systemctl daemon-reload"
 echo "------------------------------------------------"
