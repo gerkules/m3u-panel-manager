@@ -30,8 +30,8 @@ IPTV Playlist Manager
 
     bash install.sh
 
-    Следуйте инструкциям (выберите порт, по умолчанию — 5000).
-    http://your_ip:5000/admin
+    http://ip:8090/login
+    Default credentials: admin / admin
     
 
 🇺🇸 Description in English
@@ -66,5 +66,5 @@ A lightweight and fast IPTV user management panel built with Flask. It allows yo
 
     bash install.sh
 
-    Follow the prompts (choose your port, default is 5000).
-    http://your_ip:5000/admin
+    http://ip:8090/login
+    Default credentials: admin / admin
