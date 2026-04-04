@@ -1,0 +1,64 @@
+📺 IPTV Manager Panel (Hybrid Edition)
+
+Lightweight IPTV management panel built with Flask. Supports both local .m3u/.m3u8 files and internal database channel management.
+
+Легкая панель управления IPTV на базе Flask. Поддерживает как локальные .m3u/.m3u8 файлы, так и внутреннее управление каналами через базу данных.
+🇷🇺 Описание (Russian)
+
+Этот скрипт предназначен для быстрой установки панели управления IPTV на сервер Ubuntu/Debian. Панель позволяет создавать ссылки для клиентов с ограниченным сроком действия.
+Основные возможности:
+
+    Гибридный доступ: Привязка клиента к готовому файлу плейлиста или генерация плейлиста из каналов, добавленных в базу данных.
+
+    Управление токенами: У каждого клиента уникальная ссылка.
+
+    Контроль срока действия: Установка даты истечения или безлимитного доступа.
+
+    Бэкап/Восстановление: Возможность скачать базу данных и загрузить её обратно через интерфейс.
+
+    Смена порта: Настройка порта панели прямо в браузере.
+
+📝 Список последних изменений:
+
+    Информативность: В главную таблицу администратора добавлена колонка «Файл». Теперь сразу видно, какой плейлист привязан к пользователю, без необходимости заходить в редактирование.
+
+    Исправление reset.sh: Скрипт сброса пароля теперь автоматически создает таблицы в базе данных, если она пуста. Это решает проблему «No such table» при первом запуске на чистых серверах.
+
+    Улучшенная верстка: Таблица адаптирована для отображения большего количества данных.
+
+🇺🇸 Description (English)
+
+This script provides a one-click installation of an IPTV management panel on Ubuntu/Debian servers. It allows you to manage client access using unique tokens and expiration dates.
+Key Features:
+
+    Hybrid Access: Assign a client to a local .m3u file or generate a playlist dynamically from the internal DB.
+
+    Token Management: Each client gets a unique secure URL.
+
+    Expiration Control: Set specific expiration dates or grant unlimited access.
+
+    Backup & Restore: Download the entire database or restore it via the web interface.
+
+    Port Configuration: Change the panel's listening port directly from the settings menu.
+
+📝 Changelog:
+
+    Improved Visibility: Added the "File" column to the main admin table. You can now see which playlist is assigned to each user at a glance, without clicking "Edit".
+
+    reset.sh Fix: The password reset script now automatically initializes database tables if they don't exist. This fixes the "No such table" error during the first run on fresh installations.
+
+    UI Tweaks: Optimized the main table layout to better accommodate new data columns.
+
+🚀 Installation / Установка
+Bash
+
+chmod +x ch_install.sh
+sudo ./ch_install.sh
+
+Default Credentials / Данные по умолчанию:
+
+    Login: admin
+
+    Password: admin
+
+    Port: 8090
